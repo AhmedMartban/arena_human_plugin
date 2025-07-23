@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>arena_human_plugin</name>
+  <version>0.1.0</version>
+  <description>Generic Gazebo Garden plugin for controlling human pedestrians via arena_people_msgs</description>
+
+  <maintainer email="ahmed_martban@hotmail.de">Ahmed Martban</maintainer>
+  <license>MIT</license>
+
+  <!-- Build system -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- Runtime and build dependencies -->
+  <depend>rclcpp</depend>
+  <depend>ros_gz</depend>
+  <depend>arena_people_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_geometry_msgs</depend>
+  <depend>gz-sim8</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
