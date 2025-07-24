@@ -186,7 +186,7 @@ void HumanSystemPlugin::updateGazeboPedestrians(gz::sim::EntityComponentManager&
     gz::math::Pose3d actorPose;
     actorPose.Pos().X(pedestrian.position.position.x);
     actorPose.Pos().Y(pedestrian.position.position.y);
-    actorPose.Pos().Z(0.85); // Fixed height like HuNavSystemPlugin
+    actorPose.Pos().Z(0.65); // Height correction
     
     // Convert quaternion to yaw
     tf2::Quaternion quat(
@@ -219,7 +219,7 @@ void HumanSystemPlugin::updateGazeboPedestrians(gz::sim::EntityComponentManager&
       _ecm.CreateComponent(agentEntity, gz::sim::components::WorldPose(actorPose));
     }
 
-    // TF Broadcasting (SAME as HuNavSystemPlugin)
+    // TF Broadcasting 
     geometry_msgs::msg::TransformStamped tf_msg;
     tf_msg.header.stamp = rosnode_->get_clock()->now();
     tf_msg.header.frame_id = global_frame_;
@@ -252,7 +252,7 @@ void HumanSystemPlugin::updateGazeboPedestrians(gz::sim::EntityComponentManager&
     //   actorPose.Pos().X(), actorPose.Pos().Y(),
     //   actorPose.Pos().X() - pedestrian.position.position.x,
     //   actorPose.Pos().Y() - pedestrian.position.position.y);
-    //   }
+      }
 }
 
 //////////////////////////////////////////////////
