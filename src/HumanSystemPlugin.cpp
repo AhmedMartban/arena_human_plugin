@@ -165,6 +165,23 @@ void HumanSystemPlugin::updateGazeboPedestrians(gz::sim::EntityComponentManager&
       continue;
     }
 
+
+    // CRITICAL: Zero the local pose like HuNavSystemPlugin does
+    // This prevents the SDF initial pose from acting as an offset
+    auto lposeComp = _ecm.Component<gz::sim::components::Pose>(agentEntity);
+    if (nullptr == lposeComp)
+    {
+      _ecm.CreateComponent(agentEntity, gz::sim::components::Pose(gz::math::Pose3d::Zero));
+    }
+    else
+    {
+      auto p = lposeComp->Data();
+      auto newPose = p;
+      newPose.Pos().X(0);  // Zero X position
+      newPose.Pos().Y(0);  // Zero Y position
+      *lposeComp = gz::sim::components::Pose(newPose);
+    }
+    _ecm.SetChanged(agentEntity, gz::sim::components::Pose::typeId, gz::sim::ComponentState::OneTimeChange);
     // Create actor pose from pedestrian data 
     gz::math::Pose3d actorPose;
     actorPose.Pos().X(pedestrian.position.position.x);
@@ -227,7 +244,15 @@ void HumanSystemPlugin::updateGazeboPedestrians(gz::sim::EntityComponentManager&
       "Updated actor %s: pos[%.2f, %.2f, %.2f]",
       pedestrian.name.c_str(), 
       actorPose.Pos().X(), actorPose.Pos().Y(), actorPose.Pos().Z());
-  }
+
+    // RCLCPP_ERROR(rosnode_->get_logger(), 
+    //   "Actor %s: Input[%.3f, %.3f] -> Gazebo[%.3f, %.3f] -> Offset[%.3f, %.3f]", 
+    //   pedestrian.name.c_str(),
+    //   pedestrian.position.position.x, pedestrian.position.position.y,
+    //   actorPose.Pos().X(), actorPose.Pos().Y(),
+    //   actorPose.Pos().X() - pedestrian.position.position.x,
+    //   actorPose.Pos().Y() - pedestrian.position.position.y);
+    //   }
 }
 
 //////////////////////////////////////////////////
