@@ -26,11 +26,11 @@ include_directories(
 )
 
 # Human System Plugin
-add_library(HumanSystemPluginIGN SHARED src/HumanSystemPlugin.cpp)
-target_include_directories(HumanSystemPluginIGN PUBLIC
+add_library(HumanSystemPlugin SHARED src/HumanSystemPlugin.cpp)
+target_include_directories(HumanSystemPlugin PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
-ament_target_dependencies(HumanSystemPluginIGN 
+ament_target_dependencies(HumanSystemPlugin 
   rclcpp
   ros_gz
   tf2
@@ -39,12 +39,12 @@ ament_target_dependencies(HumanSystemPluginIGN
   arena_people_msgs
   gz-sim8
 )
-target_link_libraries(HumanSystemPluginIGN
+target_link_libraries(HumanSystemPlugin
   gz-sim8::gz-sim8
 )
 
 # Install targets
-install(TARGETS HumanSystemPluginIGN
+install(TARGETS HumanSystemPlugin
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
