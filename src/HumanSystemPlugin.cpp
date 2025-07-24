@@ -1,5 +1,14 @@
 #include "arena_human_plugin/HumanSystemPlugin.h"
 
+
+
+// Fix for chrono duration traits error
+namespace gz::sim::traits {
+  template<>
+  struct HasEqualityOperator<std::chrono::steady_clock::duration> {
+    static constexpr bool value = true;
+  };
+}
 using namespace arena_human_plugin;
 
 //////////////////////////////////////////////////
@@ -29,7 +38,7 @@ void HumanSystemPlugin::Configure(const gz::sim::Entity& _entity,
   counter_ = 0;
   worldEntity_ = _entity;
 
-  // Initialize ROS 2 (SAME as HuNavSystemPlugin)
+  // Initialize ROS 2 
   if (!rclcpp::ok()) {
     rclcpp::init(0, nullptr);
   }
@@ -38,7 +47,7 @@ void HumanSystemPlugin::Configure(const gz::sim::Entity& _entity,
   rosnode_ = std::make_shared<rclcpp::Node>(nodename.c_str());
   tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(rosnode_);
 
-  // Get plugin parameters (SAME as HuNavSystemPlugin)
+  // Get plugin parameters 
   sdf_ = _sdf->Clone();
 
   if (sdf_->HasElement("namespace"))
@@ -132,6 +141,27 @@ void HumanSystemPlugin::initializeAgents(gz::sim::EntityComponentManager& _ecm)
       // The actual pose data comes from arena_peds publisher
       pedestrians_[agentEntity] = pedestrian;
       
+      // Set Animation Name and Time (like HuNavSystemPlugin)
+      if (actorComp && actorComp->Data().AnimationCount() > 0) {
+        auto ani = actorComp->Data().AnimationByIndex(0);
+        
+        // Animation name
+        auto animNameComp = _ecm.Component<gz::sim::components::AnimationName>(agentEntity);
+        if(!animNameComp) {
+          _ecm.SetComponentData<gz::sim::components::AnimationName>(agentEntity, ani->Name().c_str());
+        } else {
+          *animNameComp = gz::sim::components::AnimationName(ani->Name().c_str());
+        }
+        _ecm.SetChanged(agentEntity, gz::sim::components::AnimationName::typeId, gz::sim::ComponentState::OneTimeChange);
+
+        // Animation time
+        auto animTimeComp = _ecm.Component<gz::sim::components::AnimationTime>(agentEntity);
+        if (!animTimeComp) {
+          std::chrono::steady_clock::duration oneSecond = std::chrono::seconds(0);
+          _ecm.SetComponentData<gz::sim::components::AnimationTime>(agentEntity, oneSecond);
+        }
+      }
+      
       gzmsg << "Initialized actor: " << actor_name << " (Entity: " << agentEntity << ")" << std::endl;
       return true;
     });
@@ -165,7 +195,6 @@ void HumanSystemPlugin::updateGazeboPedestrians(gz::sim::EntityComponentManager&
       continue;
     }
 
-
     // CRITICAL: Zero the local pose like HuNavSystemPlugin does
     // This prevents the SDF initial pose from acting as an offset
     auto lposeComp = _ecm.Component<gz::sim::components::Pose>(agentEntity);
@@ -182,11 +211,12 @@ void HumanSystemPlugin::updateGazeboPedestrians(gz::sim::EntityComponentManager&
       *lposeComp = gz::sim::components::Pose(newPose);
     }
     _ecm.SetChanged(agentEntity, gz::sim::components::Pose::typeId, gz::sim::ComponentState::OneTimeChange);
+
     // Create actor pose from pedestrian data 
     gz::math::Pose3d actorPose;
     actorPose.Pos().X(pedestrian.position.position.x);
     actorPose.Pos().Y(pedestrian.position.position.y);
-    actorPose.Pos().Z(0.65); // Height correction
+    actorPose.Pos().Z(0.80); // Fixed height 
     
     // Convert quaternion to yaw
     tf2::Quaternion quat(
@@ -219,6 +249,35 @@ void HumanSystemPlugin::updateGazeboPedestrians(gz::sim::EntityComponentManager&
       _ecm.CreateComponent(agentEntity, gz::sim::components::WorldPose(actorPose));
     }
 
+    // ANIMATION MANAGEMENT 
+    // Get previous pose for distance calculation
+    gz::math::Pose3d prevPose = gz::math::Pose3d::Zero;
+    if (previous_poses_.find(agentEntity) != previous_poses_.end()) {
+      prevPose = previous_poses_[agentEntity];
+    }
+
+    // Calculate distance traveled for animation synchronization
+    double distanceTraveled = (actorPose.Pos() - prevPose.Pos()).Length();
+
+    // Animation factor 
+    double animationFactor = 5.0;
+
+    // Update AnimationTime based on distance traveled
+    auto animTimeComp = _ecm.Component<gz::sim::components::AnimationTime>(agentEntity);
+    if (!animTimeComp) {
+      std::chrono::steady_clock::duration initialTime = std::chrono::seconds(0);
+      _ecm.CreateComponent(agentEntity, gz::sim::components::AnimationTime(initialTime));
+      _ecm.SetChanged(agentEntity, gz::sim::components::AnimationTime::typeId, gz::sim::ComponentState::OneTimeChange);
+    } else {
+      auto animTime = animTimeComp->Data() + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+        std::chrono::duration<double>(distanceTraveled * animationFactor));
+      *animTimeComp = gz::sim::components::AnimationTime(animTime);
+      _ecm.SetChanged(agentEntity, gz::sim::components::AnimationTime::typeId, gz::sim::ComponentState::OneTimeChange);
+    }
+
+    // Store current pose for next iteration
+    previous_poses_[agentEntity] = actorPose;
+
     // TF Broadcasting 
     geometry_msgs::msg::TransformStamped tf_msg;
     tf_msg.header.stamp = rosnode_->get_clock()->now();
@@ -244,15 +303,7 @@ void HumanSystemPlugin::updateGazeboPedestrians(gz::sim::EntityComponentManager&
       "Updated actor %s: pos[%.2f, %.2f, %.2f]",
       pedestrian.name.c_str(), 
       actorPose.Pos().X(), actorPose.Pos().Y(), actorPose.Pos().Z());
-
-    // RCLCPP_ERROR(rosnode_->get_logger(), 
-    //   "Actor %s: Input[%.3f, %.3f] -> Gazebo[%.3f, %.3f] -> Offset[%.3f, %.3f]", 
-    //   pedestrian.name.c_str(),
-    //   pedestrian.position.position.x, pedestrian.position.position.y,
-    //   actorPose.Pos().X(), actorPose.Pos().Y(),
-    //   actorPose.Pos().X() - pedestrian.position.position.x,
-    //   actorPose.Pos().Y() - pedestrian.position.position.y);
-      }
+  }
 }
 
 //////////////////////////////////////////////////

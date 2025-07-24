@@ -104,6 +104,7 @@ private:
   }
 
 private:
+  std::unordered_map<gz::sim::Entity, gz::math::Pose3d> previous_poses_;
   /// ROS node 
   rclcpp::Node::SharedPtr rosnode_;
 
