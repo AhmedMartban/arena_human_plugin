@@ -83,8 +83,56 @@ void HumanSystemPlugin::Configure(const gz::sim::Entity& _entity,
   // Initialize timing
   last_update_time_ = std::chrono::steady_clock::now();
 
+  // Create Delete Actor Service 
+
+  RCLCPP_INFO(this->rosnode_->get_logger(), "Creating delete_actors service...");
+  RCLCPP_INFO(this->rosnode_->get_logger(), "Namespace: '%s'", namespace_.c_str());
+  RCLCPP_INFO(this->rosnode_->get_logger(), "Full service name will be: '%s'", (namespace_ + "delete_actors").c_str());
+  RCLCPP_INFO(this->rosnode_->get_logger(), "ROS node name: %s", rosnode_->get_name());
+  delete_actors_service_ = this->rosnode_->create_service<arena_people_msgs::srv::DeleteActors>(
+      namespace_ + "delete_actors",
+      std::bind(&HumanSystemPlugin::deleteActorsCallback, this, std::placeholders::_1, std::placeholders::_2)
+  );
+  RCLCPP_ERROR(this->rosnode_->get_logger(), "Delete actors service created successfully!");
+
+
+
   gzmsg << "HumanSystemPlugin configured - Namespace: " << namespace_ 
         << ", Topic: " << full_topic << ", Frame: " << global_frame_ << std::endl;
+}
+
+
+//////////////////////////////////////////////////
+void HumanSystemPlugin::deleteActorsCallback(
+    const std::shared_ptr<arena_people_msgs::srv::DeleteActors::Request> request,
+    std::shared_ptr<arena_people_msgs::srv::DeleteActors::Response> response)
+{
+    (void)request; // Unused parameter
+    
+    RCLCPP_INFO(this->rosnode_->get_logger(), "=== DELETE ACTORS CALLBACK CALLED ===");
+    
+    std::vector<gz::sim::Entity> actorsToDelete;
+    
+    // Collect all pedestrian actors
+    for (const auto& [entity, agent] : pedestrians_) {
+        actorsToDelete.push_back(entity);
+        gzmsg << "Marking actor " << agent.name << " (entity: " << entity << ") for deletion" << std::endl;
+    }
+    
+    // Clear pedestrians map first to prevent further access
+    pedestrians_.clear();
+    agents_initialized_ = false;
+    
+    current_pedestrians_.reset();
+    
+    // Store deletion request for next PreUpdate cycle
+    entities_to_delete_ = actorsToDelete;
+    delete_requested_ = true;
+    
+    response->success = true;
+    response->deleted_count = static_cast<int32_t>(actorsToDelete.size());
+    
+    RCLCPP_INFO(this->rosnode_->get_logger(), "Marked %zu actors for deletion", actorsToDelete.size());
 }
 
 //////////////////////////////////////////////////
@@ -100,6 +148,22 @@ void HumanSystemPlugin::pedestriansCallback(const arena_people_msgs::msg::Pedest
 void HumanSystemPlugin::PreUpdate(const gz::sim::UpdateInfo& _info,
                                   gz::sim::EntityComponentManager& _ecm)
 {
+
+  // Handle deletion request
+  if (delete_requested_) {
+    gzmsg << "Processing actor deletion request..." << std::endl;
+    
+    for (const auto& entity : entities_to_delete_) {
+      _ecm.RequestRemoveEntity(entity);
+      gzmsg << "Requested removal of entity: " << entity << std::endl;
+    }
+    
+    entities_to_delete_.clear();
+    delete_requested_ = false;
+    
+    gzmsg << "Actor deletion completed" << std::endl;
+    return; // Skip this update cycle
+  }
   // Spin ROS node 
   rclcpp::spin_some(rosnode_);
 
