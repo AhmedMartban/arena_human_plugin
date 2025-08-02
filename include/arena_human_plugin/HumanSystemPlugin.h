@@ -46,6 +46,7 @@
 #include <builtin_interfaces/msg/time.hpp>
 #include "arena_people_msgs/msg/pedestrian.hpp"
 #include "arena_people_msgs/msg/pedestrians.hpp"
+#include "arena_people_msgs/srv/delete_actors.hpp"
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -77,6 +78,7 @@ public:
                          gz::sim::EntityComponentManager& _ecm) override;
 
 private:
+  void deleteActorsCallback(const std::shared_ptr<arena_people_msgs::srv::DeleteActors::Request> request, std::shared_ptr<arena_people_msgs::srv::DeleteActors::Response> response);
   /// \brief Callback for arena_peds topic
   void pedestriansCallback(const arena_people_msgs::msg::Pedestrians::SharedPtr msg);
 
@@ -87,7 +89,10 @@ private:
   void updateGazeboPedestrians(gz::sim::EntityComponentManager& _ecm, 
                                const gz::sim::UpdateInfo& _info, 
                                const arena_people_msgs::msg::Pedestrians& _pedestrians);
-
+  /// Delete Actor Service 
+  std::vector<gz::sim::Entity> entities_to_delete_;
+  bool delete_requested_ = false;
+  rclcpp::Service<arena_people_msgs::srv::DeleteActors>::SharedPtr delete_actors_service_;
   /// \brief Get world pose 
   gz::math::Pose3d worldPose(gz::sim::Entity entity,
                              const gz::sim::EntityComponentManager& _ecm) const;
