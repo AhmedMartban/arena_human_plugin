@@ -112,89 +112,144 @@ void HumanSystemPlugin::pedestriansCallback(const arena_people_msgs::msg::Pedest
 void HumanSystemPlugin::PreUpdate(const gz::sim::UpdateInfo& _info,
                                   gz::sim::EntityComponentManager& _ecm)
 {
+    // Spin ROS node first
+    rclcpp::spin_some(rosnode_);
 
-  if (delete_requested_) {
-    gzmsg << "Processing actor deletion request..." << std::endl;
-    
-    for (const auto& entity : entities_to_delete_) {
-      _ecm.RequestRemoveEntity(entity);
-      gzmsg << "Requested removal of entity: " << entity << std::endl;
+    // DELETE FIRST ECM ENTITIES! 
+    if (delete_requested_) {
+        RCLCPP_INFO(rosnode_->get_logger(), "Processing entity deletion for %zu actors", 
+                   entities_to_delete_.size());
+        
+        for (auto entity : entities_to_delete_) {
+            // ENTITY STILL EXISTS?
+            if (!_ecm.EntityHasComponentType(entity, gz::sim::components::Actor::typeId)) {
+                RCLCPP_WARN(rosnode_->get_logger(), "Entity %lu already deleted, skipping", entity);
+                continue;
+            }
+            
+            // important step: delete all animation components (segfault sends greetings)
+            if (_ecm.Component<gz::sim::components::AnimationName>(entity)) {
+                _ecm.RemoveComponent<gz::sim::components::AnimationName>(entity);
+            }
+            if (_ecm.Component<gz::sim::components::AnimationTime>(entity)) {
+                _ecm.RemoveComponent<gz::sim::components::AnimationTime>(entity);
+            }
+            
+            // delete trajectory components 
+            if (_ecm.Component<gz::sim::components::TrajectoryPose>(entity)) {
+                _ecm.RemoveComponent<gz::sim::components::TrajectoryPose>(entity);
+            }
+            
+            // delete pose component 
+            if (_ecm.Component<gz::sim::components::WorldPose>(entity)) {
+                _ecm.RemoveComponent<gz::sim::components::WorldPose>(entity);
+            }
+            
+            // finally entity delete request 
+            _ecm.RequestRemoveEntity(entity);
+            
+            RCLCPP_INFO(rosnode_->get_logger(), "Requested removal of entity %lu", entity);
+        }
+        
+        // Cleanup
+        delete_requested_ = false;
+        entities_to_delete_.clear();
+        
+        // important  to force reinitialization
+        agents_initialized_ = false;
+        first_update_ = false;
+        
+        RCLCPP_INFO(rosnode_->get_logger(), "Entity deletion process completed - ready for reinitialization");
+        
+        // return after reset 
+        return;
     }
+
+    // Forced re-initialization check 
+    if (!agents_initialized_ || pedestrians_.empty()) {
+        RCLCPP_INFO(rosnode_->get_logger(), "Checking for new actors to initialize...");
+        
+        
+        size_t actor_count = 0;
+        _ecm.Each<gz::sim::components::Actor, gz::sim::components::Name>(
+            [&](const gz::sim::Entity&, const gz::sim::components::Actor*, const gz::sim::components::Name*) -> bool {
+                actor_count++;
+                return true;
+            });
+        
+        if (actor_count > 0) {
+            RCLCPP_INFO(rosnode_->get_logger(), "Found %zu actors, reinitializing...", actor_count);
+            initializeAgents(_ecm);
+            agents_initialized_ = true;
+        }
+    }
+
     
-    entities_to_delete_.clear();
-    delete_requested_ = false;
-    
-    gzmsg << "Actor deletion completed" << std::endl;
-    return; // Skip this update cycle
-  }
-  
-  // Spin ROS node 
-  rclcpp::spin_some(rosnode_);
+    if (agents_initialized_ && current_pedestrians_ && !current_pedestrians_->pedestrians.empty()) {
+        updateGazeboPedestrians(_ecm, _info, *current_pedestrians_);
+    }
 
-  // Initialize agents on first update 
-  if (!agents_initialized_)
-  {
-    initializeAgents(_ecm);
-    agents_initialized_ = true;
-  }
-
-  // Update pedestrians if we have data
-  if (current_pedestrians_ && !current_pedestrians_->pedestrians.empty())
-  {
-    updateGazeboPedestrians(_ecm, _info, *current_pedestrians_);
-  }
-
-  first_update_ = false;
+    first_update_ = false;
 }
 
 //////////////////////////////////////////////////
 void HumanSystemPlugin::initializeAgents(gz::sim::EntityComponentManager& _ecm)
 {
-  pedestrians_.clear();
+    
+    pedestrians_.clear();
+    
+    RCLCPP_INFO(rosnode_->get_logger(), "Initializing agents...");
 
-  // Find all actor entities 
-  _ecm.Each<gz::sim::components::Actor, gz::sim::components::Name>(
-    [&](const gz::sim::Entity& agentEntity,
-        const gz::sim::components::Actor* actorComp,
-        const gz::sim::components::Name* name) -> bool
-    {
-      std::string actor_name = name->Data();
-      
-      // Create a pedestrian entry for this actor (ONLY for entity mapping)
-      arena_people_msgs::msg::Pedestrian pedestrian;
-      pedestrian.name = actor_name;
-      pedestrian.id = static_cast<int>(agentEntity); // Use entity ID as pedestrian ID
-      
-      // Store ONLY the entity mapping - NO pose initialization
-      // The actual pose data comes from arena_peds publisher
-      pedestrians_[agentEntity] = pedestrian;
-      
-      // Set Animation Name and Time (like HuNavSystemPlugin)
-      if (actorComp && actorComp->Data().AnimationCount() > 0) {
-        auto ani = actorComp->Data().AnimationByIndex(0);
-        
-        // Animation name
-        auto animNameComp = _ecm.Component<gz::sim::components::AnimationName>(agentEntity);
-        if(!animNameComp) {
-          _ecm.SetComponentData<gz::sim::components::AnimationName>(agentEntity, ani->Name().c_str());
-        } else {
-          *animNameComp = gz::sim::components::AnimationName(ani->Name().c_str());
-        }
-        _ecm.SetChanged(agentEntity, gz::sim::components::AnimationName::typeId, gz::sim::ComponentState::OneTimeChange);
+    // Find all actor entities 
+    _ecm.Each<gz::sim::components::Actor, gz::sim::components::Name>(
+        [&](const gz::sim::Entity& agentEntity,
+            const gz::sim::components::Actor* actorComp,
+            const gz::sim::components::Name* name) -> bool
+        {
+            std::string actor_name = name->Data();
+            
+            RCLCPP_INFO(rosnode_->get_logger(), "Processing actor: %s (Entity: %lu)", 
+                       actor_name.c_str(), agentEntity);
+            
+            // Create a pedestrian entry for this actor
+            arena_people_msgs::msg::Pedestrian pedestrian;
+            pedestrian.name = actor_name;
+            pedestrian.id = static_cast<int>(agentEntity);
+            
+            // Store entity mapping
+            pedestrians_[agentEntity] = pedestrian;
+            
+            
+            if (actorComp && actorComp->Data().AnimationCount() > 0) {
+                auto ani = actorComp->Data().AnimationByIndex(0);
+                
+               
+                _ecm.SetComponentData<gz::sim::components::AnimationName>(agentEntity, ani->Name().c_str());
+                _ecm.SetChanged(agentEntity, gz::sim::components::AnimationName::typeId, 
+                               gz::sim::ComponentState::OneTimeChange);
 
-        // Animation time
-        auto animTimeComp = _ecm.Component<gz::sim::components::AnimationTime>(agentEntity);
-        if (!animTimeComp) {
-          std::chrono::steady_clock::duration oneSecond = std::chrono::seconds(0);
-          _ecm.SetComponentData<gz::sim::components::AnimationTime>(agentEntity, oneSecond);
-        }
-      }
-      
-      gzmsg << "Initialized actor: " << actor_name << " (Entity: " << agentEntity << ")" << std::endl;
-      return true;
-    });
+              
+                std::chrono::steady_clock::duration zeroTime = std::chrono::seconds(0);
+                _ecm.SetComponentData<gz::sim::components::AnimationTime>(agentEntity, zeroTime);
+                _ecm.SetChanged(agentEntity, gz::sim::components::AnimationTime::typeId, 
+                               gz::sim::ComponentState::OneTimeChange);
+                
+                RCLCPP_INFO(rosnode_->get_logger(), "Set animation '%s' for actor %s", 
+                           ani->Name().c_str(), actor_name.c_str());
+            }
+            
+           
+            
+            RCLCPP_INFO(rosnode_->get_logger(), "Successfully initialized actor: %s (Entity: %lu)", 
+                       actor_name.c_str(), agentEntity);
+            return true;
+        });
 
-  gzmsg << "Initialized " << pedestrians_.size() << " pedestrian actors" << std::endl;
+    RCLCPP_INFO(rosnode_->get_logger(), "Completed initialization of %zu pedestrian actors", 
+               pedestrians_.size());
+    
+    // Force agents_initialized flag
+    agents_initialized_ = true;
 }
 
 //////////////////////////////////////////////////
@@ -211,6 +266,17 @@ void HumanSystemPlugin::updateGazeboPedestrians(gz::sim::EntityComponentManager&
     {
       if (stored_ped.name == pedestrian.name)
       {
+        
+        if (!_ecm.EntityHasComponentType(entity, gz::sim::components::Actor::typeId)) {
+          RCLCPP_WARN_THROTTLE(rosnode_->get_logger(), *rosnode_->get_clock(), 5000,
+                              "Entity %lu for actor %s no longer exists, triggering reinit", 
+                              entity, pedestrian.name.c_str());
+          
+          // Force reinitialization
+          agents_initialized_ = false;
+          return;
+        }
+
         agentEntity = entity;
         break;
       }
@@ -219,8 +285,12 @@ void HumanSystemPlugin::updateGazeboPedestrians(gz::sim::EntityComponentManager&
     if (agentEntity == gz::sim::kNullEntity)
     {
       RCLCPP_WARN_THROTTLE(rosnode_->get_logger(), *rosnode_->get_clock(), 5000,
-        "Actor not found for pedestrian: %s", pedestrian.name.c_str());
-      continue;
+                          "Actor not found for pedestrian: %s - triggering reinit", 
+                          pedestrian.name.c_str());
+      
+      // Force reinitialization when actor not found
+      agents_initialized_ = false;
+      return;
     }
 
     // CRITICAL: Zero the local pose like HuNavSystemPlugin does
@@ -356,6 +426,7 @@ gz::math::Pose3d HumanSystemPlugin::worldPose(gz::sim::Entity entity,
 }
 
 
+// HumanSystemPlugin.cpp - deleteActorsCallback
 void HumanSystemPlugin::deleteActorsCallback(
     const std::shared_ptr<arena_people_msgs::srv::DeleteActors::Request> request,
     std::shared_ptr<arena_people_msgs::srv::DeleteActors::Response> response)
@@ -369,23 +440,25 @@ void HumanSystemPlugin::deleteActorsCallback(
     // Collect all pedestrian actors
     for (const auto& [entity, agent] : pedestrians_) {
         actorsToDelete.push_back(entity);
-        gzmsg << "Marking actor " << agent.name << " (entity: " << entity << ") for deletion" << std::endl;
+        RCLCPP_INFO(this->rosnode_->get_logger(), "Marking actor %s (entity: %lu) for deletion", 
+                   agent.name.c_str(), entity);
     }
     
-    // Clear pedestrians map first to prevent further access
+    
     pedestrians_.clear();
     agents_initialized_ = false;
-    
     current_pedestrians_.reset();
+    first_update_ = false;  // Reset first_update flag
     
-    // Store deletion request for next PreUpdate cycle
+    
     entities_to_delete_ = actorsToDelete;
     delete_requested_ = true;
     
     response->success = true;
     response->deleted_count = static_cast<int32_t>(actorsToDelete.size());
     
-    RCLCPP_INFO(this->rosnode_->get_logger(), "Marked %zu actors for deletion", actorsToDelete.size());
+    RCLCPP_INFO(this->rosnode_->get_logger(), "Marked %zu actors for deletion in next PreUpdate cycle", 
+               actorsToDelete.size());
 }
 
 
